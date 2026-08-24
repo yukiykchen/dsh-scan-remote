@@ -1,27 +1,49 @@
 # dsh-scan-remote
 
-通过扫描电脑二维码，从 Kuikly Android 应用访问本机 DeepSeek Harness。手机只出站连接 Relay，电脑 Harness 仍监听 `127.0.0.1`。
+通过扫描电脑二维码，从 Kuikly Android 应用访问本机 DeepSeek Harness。手机只出站连接 Relay，电脑上的 Harness 仍监听 `127.0.0.1`。
 
 本仓库是 [april-jk/dsh-mobile-plugin](https://github.com/april-jk/dsh-mobile-plugin) v0.1.8 与 [april-jk/dsh-relay](https://github.com/april-jk/dsh-relay) v0.1.9 的 MIT 衍生。详见 [ATTRIBUTION.md](ATTRIBUTION.md)。
 
-## 布局
+[English](README.md)
 
-| 路径 | 作用 |
-| --- | --- |
-| 仓库根目录 | DSH Host 插件（`@yukiykchen/dsh-scan-remote`） |
-| [`relay/`](relay/) | 无账号 WSS Relay |
-| [`vectors/`](vectors/) | 共享 `sealed-tunnel-v1` 测试向量 |
+## 这个插件解决什么问题
 
-## 安装插件
+Android App 有三种连接方式。**本仓库只负责其中的「扫码连接 / Relay」**。
 
-```bash
-npx @deepseek-ai/dsh plugin --profile web add "github:yukiykchen/dsh-scan-remote#v0.0.1"
-npx @deepseek-ai/dsh web
+| 模式 | 谁在跑 Agent | 手机怎么连上 Host | 适用场景 |
+| --- | --- | --- | --- |
+| 手机本地 | 手机里的内嵌 Harness | App 直连本机 `127.0.0.1:3080` | 不依赖电脑，但要解压本地 Runtime |
+| 扫码连接（本插件） | 电脑上的 DSH | 扫 Settings 二维码，经 Relay 做端到端隧道 | 手机和电脑在同一局域网 / 热点 |
+| SSH | 电脑上的 DSH | App 建 SSH 本地端口转发 | 已有 SSH 密钥，或不方便跑 Relay |
+
+三种模式的会话缓存互相隔离。扫码连接时，API Key 配在**电脑**上的 DSH，不配在手机本地内核里。
+
+## 接入总览
+
+```text
+电脑                              手机
+DSH web :3080  (只监听 127.0.0.1)
+   ^
+   | 本机回环
+本插件 --出站 WSS--> Relay :8787 <--出站 HTTPS/WSS-- App 扫码
+                         ^
+                         |
+              二维码里的 publicRelayUrl
+              必须是手机能访问到的地址
 ```
 
-打开 **Settings > Remote Access**，扫描二维码。
+两件容易混的事：
 
-## 本地 Relay（首版）
+- `relay` / `DSH_RELAY`：插件连 Relay 用的地址，电脑本机通常是 `http://127.0.0.1:8787`。
+- `publicRelayUrl` / `PUBLIC_RELAY_URL`：写进二维码、给手机用的地址，必须是手机网段能打开的电脑 IP，例如 `http://192.168.1.10:8787`。
+
+手机**不会**内置公网域名，一律读二维码 fragment 里的 origin。
+
+## 快速开始
+
+电脑和手机先连到**同一个 Wi-Fi 或同一个热点**。
+
+### 1. 启动本地 Relay
 
 ```bash
 cd relay
@@ -33,18 +55,91 @@ HOST=127.0.0.1 PORT=8787 npm start
 
 或 `docker compose -f relay/compose.yml up --build`。
 
-插件默认：`DSH_RELAY=http://127.0.0.1:8787`。
+确认 `http://127.0.0.1:8787/health` 可访问。
 
-二维码里的 origin（手机必须能访问）：
+### 2. 安装插件并启动 DSH
 
 ```bash
-PUBLIC_RELAY_URL=http://10.0.2.2:8787      # Android 模拟器
-PUBLIC_RELAY_URL=http://192.168.1.10:8787  # 同一局域网真机
+npx @deepseek-ai/dsh plugin --profile web add "github:yukiykchen/dsh-scan-remote#v0.0.1"
 ```
 
-应用不内置公网域名，一律读取二维码 fragment 中的 origin。
+看电脑当前局域网 IP（手机必须能 ping 通这一台）：
 
-## 配对
+```bash
+ipconfig getifaddr en0    # macOS Wi-Fi
+# 或 ifconfig / ip addr
+```
+
+把手机能访问的地址写进配置后启动 Host：
+
+```bash
+export PUBLIC_RELAY_URL=http://192.168.1.10:8787   # 换成你的电脑 LAN IP
+npx @deepseek-ai/dsh web
+```
+
+如果已经用过插件，也可以直接改 `~/.dsh-scan-remote/config.json` 里的 `publicRelayUrl`，再重启 DSH。
+
+打开浏览器里的 DSH：**Settings > Remote Access**，应看到二维码、倒计时和电脑名。
+
+### 3. 手机扫码
+
+1. 打开 Android App，首页选 **扫码连接**。
+2. 点 **扫描电脑二维码**，对准 Settings 页的码。
+3. 配对成功后点 **连接已配对电脑** 进入聊天。
+
+首版只保存一台电脑。要换电脑，先在 App 里点「移除这台电脑」，再扫新码。
+
+## 换网络以后为什么连不上
+
+二维码里的 IP 是生成当时写死的。电脑换 Wi-Fi、改连手机热点、或从公司网切到热点后，旧码里的地址（例如 `30.x`）对当前网段无效，手机会超时：
+
+```text
+failed to connect to /30.27.141.67 (port 8787)
+```
+
+每次电脑 IP 变了，都要：
+
+1. 改 `~/.dsh-scan-remote/config.json` 的 `publicRelayUrl` 为**当前**电脑地址，或重新 `export PUBLIC_RELAY_URL=...`。
+2. 重启 DSH（先停掉占用 `3080` 的旧进程，再 `npx @deepseek-ai/dsh web`）。
+3. 打开 **Settings > Remote Access**，用手机**重新扫新码**。
+
+常见地址：
+
+| 电脑所在网络 | `publicRelayUrl` 通常是 |
+| --- | --- |
+| 家里 / 办公室 Wi-Fi | `http://192.168.x.x:8787` |
+| 手机热点（电脑加入热点） | `http://172.20.10.x:8787`（以电脑在热点上的地址为准） |
+| Android 模拟器访问电脑 Relay | `http://10.0.2.2:8787` |
+| 公司网段手机访问不到 | 不要用这个 IP，改连双方都能互通的网络 |
+
+`relay` 保持 `http://127.0.0.1:8787` 即可，一般不用改。
+
+## 重启 DSH
+
+```bash
+# 查看并结束旧的 web Host（端口 3080 被占用时必须先停）
+lsof -iTCP:3080 -sTCP:LISTEN
+# 然后重新启动
+npx @deepseek-ai/dsh web
+```
+
+本机如果是从 DeepSeek Harness 仓库开发，也可以用仓库里的 `pnpm dsh web`，效果相同。改完 `publicRelayUrl` 后一定要重启，否则 Settings 里仍是旧码。
+
+## 配置
+
+凭据保存在 `~/.dsh-scan-remote/config.json`（权限 `0600`），与上游 `~/.dsh-remote` 隔离。可用环境变量覆盖默认值：
+
+| 字段 / 环境变量 | 含义 |
+| --- | --- |
+| `relay` / `DSH_RELAY` | 插件连接 Relay 的地址，默认 `http://127.0.0.1:8787` |
+| `publicRelayUrl` / `PUBLIC_RELAY_URL` | 二维码 origin，必须是手机能访问的地址 |
+| `dshPort` / `DSH_PORT` | 本机 Harness 端口，默认 `3080` |
+| `hostName` / `DSH_DEVICE_NAME` | Settings 里显示的电脑名 |
+| `DSH_SCAN_REMOTE_CONFIG` | 自定义配置文件路径 |
+
+不要把 `hostToken`、`e2eeMasterKey` 提交到 Git 或发到聊天里。
+
+## 配对协议
 
 1. Host 生成 32 字节主密钥，并用 HKDF 派生 `claimToken`（info：`dsh-claim-v1`）。
 2. Host `POST /pair/session`，只提交 `SHA-256(claimToken)`。
@@ -54,6 +149,22 @@ PUBLIC_RELAY_URL=http://192.168.1.10:8787  # 同一局域网真机
 
 v1 使用 `sealed-tunnel-v1`（二维码 PSK，无前向保密）。Noise IK / WebRTC 放到 v2。
 
-## 配置
+## 故障排查
 
-凭据保存在 `~/.dsh-scan-remote/config.json`（权限 `0600`），与上游 `~/.dsh-remote` 隔离。
+| 现象 | 先查 |
+| --- | --- |
+| 手机超时连不上 `30.x` / 旧 IP | `publicRelayUrl` 不是当前网段，改配置、重启、扫新码 |
+| `EADDRINUSE 127.0.0.1:3080` | 已有 DSH web 在跑，先停再启动 |
+| Settings 没有 Remote Access | 插件没装到 `web` profile，或 Host 不是用装过插件的 profile 启动 |
+| 扫码成功但聊天连不上 | Relay 是否仍在 `8787` 监听；电脑防火墙是否放行该端口；手机和电脑是否同一二层网络 |
+| 公司网能开电脑但不能对话 | 部分企业网隔离客户端互通，改用热点或双方都能访问的网段 |
+
+Relay 部署细节见 [`relay/README.zh-CN.md`](relay/README.zh-CN.md)。
+
+## 布局
+
+| 路径 | 作用 |
+| --- | --- |
+| 仓库根目录 | DSH Host 插件（`@yukiykchen/dsh-scan-remote`） |
+| [`relay/`](relay/) | 无账号 WSS Relay |
+| [`vectors/`](vectors/) | 共享 `sealed-tunnel-v1` 测试向量 |
