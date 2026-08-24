@@ -25,6 +25,13 @@ export function apply(ctx, pluginConfig) {
                 manager = new RemoteAccessManager(config);
                 unregister = registerManagementRoutes(ctx.webServer, manager);
                 await manager.initialize();
+                if (disposed) {
+                    unregister?.();
+                    unregister = undefined;
+                    manager.dispose();
+                    manager = undefined;
+                    return;
+                }
                 ctx.logger.info(config.hostToken
                     ? `dsh-scan-remote connecting through ${config.relay}`
                     : "dsh-scan-remote is ready to show a pairing QR in Settings > Remote Access");

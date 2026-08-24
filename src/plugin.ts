@@ -37,6 +37,13 @@ export function apply(ctx: PluginContext, pluginConfig: PluginConfig) {
         manager = new RemoteAccessManager(config);
         unregister = registerManagementRoutes(ctx.webServer, manager);
         await manager.initialize();
+        if (disposed) {
+          unregister?.();
+          unregister = undefined;
+          manager.dispose();
+          manager = undefined;
+          return;
+        }
         ctx.logger.info(
           config.hostToken
             ? `dsh-scan-remote connecting through ${config.relay}`
