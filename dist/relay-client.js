@@ -67,6 +67,7 @@ function closeSocket(socket, code, reason) {
     else
         socket.close(normalized, String(reason ?? "").slice(0, 100));
 }
+const liveClients = new Map();
 export class RelayClient {
     config;
     ws;
@@ -76,8 +77,10 @@ export class RelayClient {
     healthCheckInFlight = false;
     healthTracker = new HealthStatusTracker();
     retry = 0;
+    connectGeneration = 0;
     heartbeat;
     healthTimer;
+    reconnectTimer;
     secureSessions = new Map();
     localSockets = new Map();
     localRequests = new Map();
@@ -89,16 +92,49 @@ export class RelayClient {
     }
     async start() {
         this.stopped = false;
+        this.occupySlot();
         await this.checkHealth();
+        if (this.stopped)
+            return;
+        clearInterval(this.healthTimer);
         this.healthTimer = setInterval(() => void this.checkHealth(), 5000);
         this.connect();
     }
     stop() {
         this.stopped = true;
+        this.authenticated = false;
+        this.connectGeneration += 1;
+        this.releaseSlot();
+        clearTimeout(this.reconnectTimer);
         clearInterval(this.heartbeat);
         clearInterval(this.healthTimer);
-        this.ws?.close();
+        this.dropSocket();
         this.closeAllSessions();
+    }
+    occupySlot() {
+        const hostId = this.config.hostId;
+        if (!hostId)
+            return;
+        const existing = liveClients.get(hostId);
+        if (existing && existing !== this)
+            existing.stop();
+        liveClients.set(hostId, this);
+    }
+    releaseSlot() {
+        const hostId = this.config.hostId;
+        if (hostId && liveClients.get(hostId) === this)
+            liveClients.delete(hostId);
+    }
+    dropSocket() {
+        const socket = this.ws;
+        this.ws = undefined;
+        if (!socket)
+            return;
+        socket.removeAllListeners();
+        if (socket.readyState === WebSocket.CONNECTING ||
+            socket.readyState === WebSocket.OPEN) {
+            socket.close();
+        }
     }
     relayWsUrl() {
         const url = new URL(this.config.relay);
@@ -109,17 +145,26 @@ export class RelayClient {
     connect() {
         if (this.stopped)
             return;
+        const generation = ++this.connectGeneration;
+        clearTimeout(this.reconnectTimer);
+        this.dropSocket();
         const ws = new WebSocket(this.relayWsUrl());
         this.ws = ws;
-        ws.on("open", () => ws.send(JSON.stringify(message("auth", {
-            hostId: this.config.hostId,
-            hostToken: this.config.hostToken,
-            capabilities: this.config.e2eeMasterKey
-                ? ["sealed-tunnel-v1"]
-                : [],
-            version: PLUGIN_VERSION,
-        }))));
+        ws.on("open", () => {
+            if (generation !== this.connectGeneration || this.stopped)
+                return;
+            ws.send(JSON.stringify(message("auth", {
+                hostId: this.config.hostId,
+                hostToken: this.config.hostToken,
+                capabilities: this.config.e2eeMasterKey
+                    ? ["sealed-tunnel-v1"]
+                    : [],
+                version: PLUGIN_VERSION,
+            })));
+        });
         ws.on("message", (raw) => {
+            if (generation !== this.connectGeneration || this.stopped)
+                return;
             let value;
             try {
                 value = JSON.parse(raw.toString());
@@ -133,16 +178,25 @@ export class RelayClient {
             else
                 ws.close(4000, "invalid envelope");
         });
-        ws.on("close", () => {
+        ws.on("close", (code, reason) => {
+            if (generation !== this.connectGeneration)
+                return;
             this.authenticated = false;
+            if (this.ws === ws)
+                this.ws = undefined;
             clearInterval(this.heartbeat);
             this.closeAllSessions();
-            if (!this.stopped) {
-                const schedule = [1000, 2000, 5000, 10000, 30000];
-                const delay = schedule[Math.min(this.retry++, schedule.length - 1)];
-                console.log(`Relay disconnected; retrying in ${delay / 1000}s`);
-                setTimeout(() => this.connect(), delay);
-            }
+            if (this.stopped)
+                return;
+            const schedule = [1000, 2000, 5000, 10000, 30000];
+            const delay = schedule[Math.min(this.retry++, schedule.length - 1)];
+            const detail = String(reason ?? "").trim();
+            console.log(`Relay disconnected (${code}${detail ? ` ${detail}` : ""}); retrying in ${delay / 1000}s`);
+            this.reconnectTimer = setTimeout(() => {
+                if (generation !== this.connectGeneration || this.stopped)
+                    return;
+                this.connect();
+            }, delay);
         });
         ws.on("error", () => undefined);
     }
@@ -203,6 +257,7 @@ export class RelayClient {
             this.retry = 0;
             console.log(`Connected to Relay; DSH is ${this.health ? "online" : "offline"}`);
             this.sendOuter("status", { dsh: this.health ? "online" : "offline" });
+            clearInterval(this.heartbeat);
             this.heartbeat = setInterval(() => this.sendOuter("ping", {}), 25000);
             return;
         }
