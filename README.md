@@ -15,7 +15,7 @@ This is an MIT fork of [april-jk/dsh-mobile-plugin](https://github.com/april-jk/
 ## Install the plugin
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add "github:yukiykchen/dsh-scan-remote#v0.1.0"
+npx @deepseek-ai/dsh plugin --profile web add "github:yukiykchen/dsh-scan-remote#v0.0.1"
 npx @deepseek-ai/dsh web
 ```
 

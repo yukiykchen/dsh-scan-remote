@@ -15,7 +15,7 @@
 ## 安装插件
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add "github:yukiykchen/dsh-scan-remote#v0.1.0"
+npx @deepseek-ai/dsh plugin --profile web add "github:yukiykchen/dsh-scan-remote#v0.0.1"
 npx @deepseek-ai/dsh web
 ```
 

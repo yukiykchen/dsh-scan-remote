@@ -1,6 +1,6 @@
 {
   "name": "@yukiykchen/dsh-scan-remote",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Passwordless QR remote access plugin for DeepSeek Harness",
   "license": "MIT",
   "repository": {

@@ -12,7 +12,7 @@ test("publishes an installable DSH bundle manifest", async () => {
     "utf8",
   );
   assert.equal(manifest.name, "@yukiykchen/dsh-scan-remote");
-  assert.equal(manifest.version, "0.1.0");
+  assert.equal(manifest.version, "0.0.1");
   assert.deepEqual(manifest.bin, { "dsh-scan-remote": "dist/cli.js" });
   assert.equal(manifest.dsh.bundle.patch, "./cordis.patch.yml");
   assert.equal(manifest.exports["./client"], "./client.js");
@@ -56,7 +56,7 @@ test("documents a path-free official DSH install command", async () => {
   );
   assert.match(
     readme,
-    /npx @deepseek-ai\/dsh plugin --profile web add "github:yukiykchen\/dsh-scan-remote#v0\.1\.0"/,
+    /npx @deepseek-ai\/dsh plugin --profile web add "github:yukiykchen\/dsh-scan-remote#v0\.0\.1"/,
   );
   assert.doesNotMatch(readme, /\/absolute\/path/);
 });

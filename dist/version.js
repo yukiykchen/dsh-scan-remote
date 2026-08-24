@@ -1,4 +1,4 @@
-export const PLUGIN_VERSION = "0.1.0";
+export const PLUGIN_VERSION = "0.0.1";
 export const PLUGIN_PACKAGE = "@yukiykchen/dsh-scan-remote";
 export const PLUGIN_REPOSITORY = "yukiykchen/dsh-scan-remote";
 export const EXPECTED_DSH_VERSION = "0.1.0-rc.6";

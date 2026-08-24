@@ -20,7 +20,7 @@ This is an MIT fork of april-jk/dsh-mobile-plugin v0.1.8 and april-jk/dsh-relay 
 ## Install
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add "github:yukiykchen/dsh-scan-remote#v0.1.0"
+npx @deepseek-ai/dsh plugin --profile web add "github:yukiykchen/dsh-scan-remote#v0.0.1"
 npx @deepseek-ai/dsh web
 ```
 
