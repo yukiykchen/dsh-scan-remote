@@ -1,0 +1,88 @@
+name: GitHub Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Verify tag matches package version
+        run: |
+          package_version="$(node --print "require('./package.json').version")"
+          expected_tag="v${package_version}"
+          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $package_version (expected $expected_tag)." >&2
+            exit 1
+          fi
+      - run: npm run build
+      - run: npm test
+      - name: Verify committed bundle is current
+        run: git diff --exit-code -- dist
+      - name: Build release artifact
+        id: pack
+        run: |
+          package_file="$(npm pack --silent)"
+          test -f "$package_file"
+          sha256sum "$package_file" > SHA256SUMS
+          echo "package_file=$package_file" >> "$GITHUB_OUTPUT"
+      - name: Publish immutable install artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_FILE: ${{ steps.pack.outputs.package_file }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            expected_assets="$(printf '%s\n' "$PACKAGE_FILE" SHA256SUMS | sort)"
+            release_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | sort)"
+            if [[ "$release_assets" != "$expected_assets" ]]; then
+              echo "Release $GITHUB_REF_NAME has an unexpected asset set." >&2
+              diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$release_assets") || true
+              exit 1
+            fi
+
+            download_dir="$(mktemp -d)"
+            trap 'rm -rf "$download_dir"' EXIT
+            gh release download "$GITHUB_REF_NAME" \
+              --dir "$download_dir" \
+              --pattern "$PACKAGE_FILE" \
+              --pattern SHA256SUMS
+            cmp "$PACKAGE_FILE" "$download_dir/$PACKAGE_FILE"
+            cmp SHA256SUMS "$download_dir/SHA256SUMS"
+            echo "Release assets already exist and are byte-for-byte identical."
+          else
+            gh release create "$GITHUB_REF_NAME" "$PACKAGE_FILE" SHA256SUMS \
+              --generate-notes \
+              --title "$GITHUB_REF_NAME" \
+              --verify-tag
+          fi
+      - name: Publish to npm when explicitly enabled
+        if: ${{ vars.NPM_PUBLISH_ENABLED == 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGE_FILE: ${{ steps.pack.outputs.package_file }}
+        run: |
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "NPM_PUBLISH_ENABLED is true, but the NPM_TOKEN secret is not configured." >&2
+            exit 1
+          fi
+          package_spec="$(node --print "require('./package.json').name + '@' + require('./package.json').version")"
+          if npm view "$package_spec" version >/dev/null 2>&1; then
+            echo "$package_spec is already published; skipping npm publish."
+          else
+            npm publish "$PACKAGE_FILE" --access public --provenance
+          fi

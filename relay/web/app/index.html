@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#f7f8fa">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <title>DSH Remote</title>
+    <link rel="stylesheet" href="/app/app.css?v=0.1.8">
+    <script src="/app/crypto.js" defer></script>
+    <script src="/app/key-store.js?v=0.1.9" defer></script>
+    <script src="/app/qr-scanner.umd.min.js" defer></script>
+    <script src="/app/app.js?v=0.1.9" defer></script>
+  </head>
+  <body data-view="loading">
+    <header id="topbar" class="topbar hidden">
+      <a class="brand compact" href="/app/" aria-label="DSH Remote 首页">
+        <span class="brand-mark" aria-hidden="true">✦</span>
+        <span class="brand-name">deepseek</span>
+        <span class="brand-tag">HARNESS</span>
+      </a>
+      <nav class="topbar-actions" aria-label="设备操作">
+        <button id="show-pair" class="icon-button" type="button" aria-label="添加电脑" title="添加电脑">＋</button>
+        <button id="show-settings" class="icon-button" type="button" aria-label="设置" title="设置">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
+        </button>
+      </nav>
+    </header>
+
+    <main>
+      <section id="loading" class="state-view" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span class="sr-only">正在载入</span>
+      </section>
+
+      <section id="auth" class="auth-layout hidden">
+        <div class="auth-inner">
+          <div class="brand auth-brand" aria-label="DeepSeek Harness">
+            <span class="brand-mark" aria-hidden="true">✦</span>
+            <span class="brand-name">deepseek</span>
+            <span class="brand-tag">HARNESS</span>
+          </div>
+          <div class="auth-copy">
+            <h1 id="auth-title">连接你的 DSH</h1>
+            <p id="auth-description">登录后访问已绑定电脑上的 DeepSeek Harness。</p>
+          </div>
+          <div class="segmented" role="tablist" aria-label="账号操作">
+            <button id="login-mode" class="active" type="button" role="tab" aria-selected="true">登录</button>
+            <button id="register-mode" type="button" role="tab" aria-selected="false">注册</button>
+          </div>
+          <form id="auth-form">
+            <label for="email">邮箱</label>
+            <input id="email" name="email" type="email" autocomplete="email" placeholder="name@example.com" required>
+            <label for="password">密码</label>
+            <div class="password-field">
+              <input id="password" name="password" type="password" autocomplete="current-password" placeholder="至少 8 位" minlength="8" required>
+              <button id="toggle-password" class="field-icon-button" type="button" aria-label="显示密码" title="显示密码">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.8"/></svg>
+              </button>
+            </div>
+            <p id="auth-error" class="form-error" role="alert"></p>
+            <button id="auth-submit" class="primary-button" type="submit">登录</button>
+          </form>
+          <p class="security-note">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+            远程内容使用端到端加密传输，Relay 无法读取。
+          </p>
+          <p class="relay-note">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="1"/><rect x="4" y="14" width="16" height="6" rx="1"/><path d="M8 7h.01M8 17h.01"/></svg>
+            Relay：<span id="relay-host"></span>
+          </p>
+        </div>
+      </section>
+
+      <section id="dashboard" class="dashboard hidden">
+        <div class="page-heading">
+          <h1>我的电脑</h1>
+          <p>选择一台电脑打开远程 DeepSeek Harness。</p>
+        </div>
+        <div id="pair-notice" class="notice hidden" role="status"></div>
+        <div id="device-list" class="device-list" aria-live="polite"></div>
+        <div id="empty-devices" class="empty-state hidden">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M17 8v5M14.5 10.5h5"/></svg>
+          <h2>还没有绑定电脑</h2>
+        <p>扫描电脑上的配对码可绑定电脑；扫描浏览器访问码可在当前浏览器启用端到端访问。</p>
+          <button class="primary-button pair-trigger" type="button">扫描二维码</button>
+        </div>
+      </section>
+
+      <section id="connecting" class="connection-state hidden" aria-live="assertive">
+        <span class="spinner" aria-hidden="true"></span>
+        <h1>正在安全连接</h1>
+        <p id="connecting-device">正在建立端到端加密隧道。</p>
+        <button id="cancel-connecting" class="secondary-button" type="button">返回设备列表</button>
+      </section>
+    </main>
+
+    <dialog id="pair-dialog">
+      <form id="pair-form" method="dialog">
+        <div class="dialog-heading">
+          <h2>绑定电脑</h2>
+          <button id="close-pair" class="icon-button" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="pair-method" role="tablist" aria-label="绑定方式">
+          <button id="scan-mode" class="active" type="button" role="tab" aria-selected="true">扫描二维码</button>
+          <button id="manual-mode" type="button" role="tab" aria-selected="false">输入链接</button>
+        </div>
+        <div id="scan-panel" class="scan-panel">
+          <div class="camera-frame">
+            <video id="pair-camera" autoplay muted playsinline></video>
+            <span class="camera-corner top-left" aria-hidden="true"></span>
+            <span class="camera-corner top-right" aria-hidden="true"></span>
+            <span class="camera-corner bottom-left" aria-hidden="true"></span>
+            <span class="camera-corner bottom-right" aria-hidden="true"></span>
+            <span id="camera-loading" class="camera-loading"><span class="spinner" aria-hidden="true"></span></span>
+          </div>
+          <p id="camera-status" class="camera-status">正在请求摄像头权限…</p>
+          <button id="camera-retry" class="secondary-button camera-retry hidden" type="button">重新请求摄像头</button>
+        </div>
+        <div id="manual-panel" class="manual-panel hidden">
+          <div class="pair-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2M20 14v2M14 18h2v2M18 18h2v2"/></svg>
+          </div>
+          <p>也可以粘贴电脑生成的配对链接或浏览器访问链接。</p>
+        </div>
+        <div id="pair-link-field" class="pair-link-field hidden">
+          <label for="pair-link">配对链接</label>
+          <textarea id="pair-link" rows="4" autocomplete="off" spellcheck="false" placeholder="https://relay.dshmobile.online/app/#/pair?…"></textarea>
+        </div>
+        <p id="pair-error" class="form-error" role="alert"></p>
+        <button id="manual-submit" class="primary-button hidden" type="submit">绑定电脑</button>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog">
+      <div class="dialog-heading settings-heading">
+        <h2>设置</h2>
+        <button id="close-settings" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="settings-content">
+        <section>
+          <h3>账号</h3>
+          <div class="settings-row"><span>登录邮箱</span><strong id="settings-email"></strong></div>
+        </section>
+        <section>
+          <h3>连接</h3>
+          <div class="settings-row"><span>Relay 服务器</span><strong id="settings-relay"></strong></div>
+          <div class="settings-row"><span>传输加密</span><strong class="success-text">端到端加密</strong></div>
+        </section>
+        <button id="logout" class="danger-button" type="button">退出登录</button>
+      </div>
+    </dialog>
+  </body>
+</html>

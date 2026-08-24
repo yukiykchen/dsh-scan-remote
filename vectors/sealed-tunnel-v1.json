@@ -1,0 +1,24 @@
+{
+  "version": "sealed-tunnel-v1",
+  "masterKeyB64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "clientRandomB64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+  "serverRandomB64": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+  "accessSessionId": "access_test_vector",
+  "clientProofB64": "F3mAmAuR30RnLXq7TMUeMNWZquo8GPHVyCxWycTDW80",
+  "serverProofB64": "IXvvgrKVbAjjW-M2rLOmf-blsUwmbgLa6y79lEj1vNA",
+  "claimTokenB64": "-BiV3_1TYHFx2A-ORZUKhoA8s1zexo31h4Co08RePVs",
+  "claimTokenHashHex": "70430f905f6a3e40c8362608b4a4c84be613e36b0e9a83d9a9ffd9dfeed1453f",
+  "httpReq": {
+    "v": 1,
+    "type": "http_req",
+    "channel": "ch_test",
+    "id": "request_1",
+    "ts": 0,
+    "payload": {
+      "method": "POST",
+      "path": "/canary",
+      "bodyB64": "c2VjcmV0"
+    }
+  },
+  "httpReqCiphertextB64": "voqHzLsUCWC__C-NBr-s0t1AshPpTEwNwSoOrhx_ihApnwkPlwKxr7EX28kmqOjoVQus161QnjXyzjxDil_WXgnkvu0pgQfiGV27QIgL97KPe2X0nv9vlzLUmwMll0ipeUo2IZKgM-Rt_WRa_-TyyL9SEkozijz1Z6HBxk1hfLiwQEb602fzHVGQP4Wh3Q2B41mrL_-AGQ"
+}

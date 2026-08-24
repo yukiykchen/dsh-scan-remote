@@ -1,0 +1,8 @@
+# Register the outbound remote companion. Native directory pickers stay enabled.
+- insert:
+    - id: dsh-scan-remote
+      name: '@yukiykchen/dsh-scan-remote'
+      inject: [webStartup, webServer]
+      config:
+        relay: !!js process.env.DSH_RELAY ?? 'http://127.0.0.1:8787'
+        dshPort: !!js ctx.webStartup.port ?? 3080

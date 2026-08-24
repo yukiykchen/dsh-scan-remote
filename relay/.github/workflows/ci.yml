@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Verify version metadata
+        run: |
+          node <<'NODE'
+          const packageJson = require('./package.json');
+          const packageLock = require('./package-lock.json');
+          const version = packageJson.version;
+          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+            throw new Error(`Invalid release version: ${version}`);
+          }
+          if (packageLock.version !== version || packageLock.packages?.['']?.version !== version) {
+            throw new Error('package.json and package-lock.json versions do not match');
+          }
+          console.log(`Verified dsh-relay ${version}`);
+          NODE
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+      - name: Build production container
+        run: docker build -t dsh-relay:ci .

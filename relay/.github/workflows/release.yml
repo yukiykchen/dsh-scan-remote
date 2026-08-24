@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged revision
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Verify tag, package versions, and release order
+        id: release_policy
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const { appendFileSync } = require('node:fs');
+          const packageJson = require('./package.json');
+          const packageLock = require('./package-lock.json');
+          const expectedTag = `v${packageJson.version}`;
+          const stableTag = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+          if (process.env.RELEASE_TAG !== expectedTag) {
+            throw new Error(`Tag ${process.env.RELEASE_TAG} must match package version ${expectedTag}`);
+          }
+          if (!stableTag.test(process.env.RELEASE_TAG)) {
+            throw new Error(`Release tag must be stable SemVer: ${process.env.RELEASE_TAG}`);
+          }
+          if (packageLock.version !== packageJson.version ||
+              packageLock.packages?.['']?.version !== packageJson.version) {
+            throw new Error('package.json and package-lock.json versions do not match');
+          }
+          const tags = execFileSync('git', ['tag', '--list'], { encoding: 'utf8' })
+            .trim()
+            .split('\n')
+            .filter((tag) => stableTag.test(tag));
+          tags.sort((left, right) => {
+            const a = stableTag.exec(left).slice(1).map(BigInt);
+            const b = stableTag.exec(right).slice(1).map(BigInt);
+            for (let index = 0; index < 3; index += 1) {
+              if (a[index] < b[index]) return -1;
+              if (a[index] > b[index]) return 1;
+            }
+            return 0;
+          });
+          const latestTag = tags.at(-1);
+          if (!latestTag) throw new Error('No stable SemVer release tag found');
+          const isLatest = process.env.RELEASE_TAG === latestTag;
+          appendFileSync(process.env.GITHUB_OUTPUT, `is_latest=${isLatest}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `latest_tag=${latestTag}\n`);
+          console.log(`${process.env.RELEASE_TAG} latest=${isLatest} (highest=${latestTag})`);
+          NODE
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+      - name: Build and publish the Relay container
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_LATEST: ${{ steps.release_policy.outputs.is_latest }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/dsh-relay"
+          version="${RELEASE_TAG#v}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if manifest_output="$(docker manifest inspect "${image}:${version}" 2>&1)"; then
+            docker pull "${image}:${version}"
+            published_revision="$(docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+              "${image}:${version}")"
+            if [[ "${published_revision}" != "${GITHUB_SHA}" ]]; then
+              echo "Refusing to replace immutable ${image}:${version}; published revision is ${published_revision:-unset}" >&2
+              exit 1
+            fi
+            echo "${image}:${version} already contains revision ${GITHUB_SHA}"
+          elif grep -Eqi 'manifest unknown|no such manifest' <<<"${manifest_output}"; then
+            docker build \
+              --build-arg "VERSION=${version}" \
+              --build-arg "VCS_REF=${GITHUB_SHA}" \
+              -t "${image}:${version}" .
+            docker push "${image}:${version}"
+          else
+            printf '%s\n' "${manifest_output}" >&2
+            exit 1
+          fi
+          if [[ "${IS_LATEST}" == "true" ]]; then
+            docker tag "${image}:${version}" "${image}:latest"
+            docker push "${image}:latest"
+          else
+            echo "Not updating ${image}:latest from older tag ${RELEASE_TAG}"
+          fi
+      - name: Package release archives
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          archive_root="dsh-relay-${version}"
+          output_dir="release"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          mkdir -p "${output_dir}/${archive_root}"
+          cp -R dist "${output_dir}/${archive_root}/dist"
+          cp -R web "${output_dir}/${archive_root}/web"
+          cp package.json package-lock.json README.md README.zh-CN.md LICENSE \
+            .env.example Dockerfile compose.yml railway.json \
+            "${output_dir}/${archive_root}/"
+          find "${output_dir}/${archive_root}" -exec touch -d "@${source_date_epoch}" {} +
+          tar --sort=name --mtime="@${source_date_epoch}" \
+            --owner=0 --group=0 --numeric-owner \
+            -C "${output_dir}" -cf - "${archive_root}" \
+            | gzip -n > "${output_dir}/dsh-relay-${RELEASE_TAG}.tar.gz"
+          (cd "${output_dir}" && find "${archive_root}" -print \
+            | LC_ALL=C sort \
+            | zip -X -q "dsh-relay-${RELEASE_TAG}.zip" -@)
+          (cd "${output_dir}" && sha256sum \
+            "dsh-relay-${RELEASE_TAG}.tar.gz" \
+            "dsh-relay-${RELEASE_TAG}.zip" > SHA256SUMS)
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_LATEST: ${{ steps.release_policy.outputs.is_latest }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            for asset in \
+              release/dsh-relay-"${GITHUB_REF_NAME}".tar.gz \
+              release/dsh-relay-"${GITHUB_REF_NAME}".zip \
+              release/SHA256SUMS; do
+              name="$(basename "${asset}")"
+              remote_digest="$(gh release view "$GITHUB_REF_NAME" --json assets \
+                --jq ".assets[] | select(.name == \"${name}\") | .digest")"
+              if [[ -n "${remote_digest}" ]]; then
+                local_digest="sha256:$(sha256sum "${asset}" | cut -d ' ' -f 1)"
+                if [[ "${local_digest}" != "${remote_digest}" ]]; then
+                  echo "Refusing to replace immutable release asset ${name}" >&2
+                  echo "local=${local_digest} remote=${remote_digest}" >&2
+                  exit 1
+                fi
+                echo "${name} already exists with digest ${local_digest}"
+              else
+                gh release upload "$GITHUB_REF_NAME" "${asset}"
+              fi
+            done
+            if [[ "${IS_LATEST}" == "true" ]]; then
+              gh release edit "$GITHUB_REF_NAME" --latest
+            else
+              echo "Not changing GitHub Latest from older tag ${GITHUB_REF_NAME}"
+            fi
+          else
+            latest_flag="--latest=false"
+            if [[ "${IS_LATEST}" == "true" ]]; then latest_flag="--latest"; fi
+            gh release create "$GITHUB_REF_NAME" \
+              release/dsh-relay-"${GITHUB_REF_NAME}".tar.gz \
+              release/dsh-relay-"${GITHUB_REF_NAME}".zip \
+              release/SHA256SUMS \
+              --verify-tag \
+              --title "dsh-relay ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              "${latest_flag}"
+          fi

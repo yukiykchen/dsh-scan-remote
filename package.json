@@ -1,0 +1,77 @@
+{
+  "name": "@yukiykchen/dsh-scan-remote",
+  "version": "0.1.0",
+  "description": "Passwordless QR remote access plugin for DeepSeek Harness",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yukiykchen/dsh-scan-remote.git"
+  },
+  "homepage": "https://github.com/yukiykchen/dsh-scan-remote#readme",
+  "bugs": {
+    "url": "https://github.com/yukiykchen/dsh-scan-remote/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "cordis",
+    "remote-access"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "dist/plugin.js",
+  "exports": {
+    ".": "./dist/plugin.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./client": "./client.js"
+  },
+  "bin": {
+    "dsh-scan-remote": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "ATTRIBUTION.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js start",
+    "test": "tsx --test test/*.test.ts",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1-rc.1",
+    "commander": "^13.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

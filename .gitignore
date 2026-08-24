@@ -1,0 +1,15 @@
+node_modules/
+.env*
+!.env.example
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+coverage/
+.dsh-scan-remote/
+dsh-remote.config.json
+relay/data/
+relay/*.sqlite
+relay/*.sqlite-journal
+.DS_Store
