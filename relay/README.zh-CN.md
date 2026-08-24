@@ -6,6 +6,8 @@
 
 用于 DSH 手机遥控 MVP 的云端 Relay。
 
+本 fork 的手机接入是**无账号扫码**：电脑装仓库根目录的插件，二维码 origin 用 `PUBLIC_RELAY_URL`。完整步骤见 [../README.zh-CN.md](../README.zh-CN.md)。下文部分内容仍沿用上游账号版 Relay 的部署说明，和当前 App 扫码流程不是同一条产品路径。
+
 公共生产地址：`https://relay.dshmobile.online`。0.1.9 默认只路由端到端加密的 sealed tunnel，不接收 DSH 业务明文。
 
 ## 浏览器访问

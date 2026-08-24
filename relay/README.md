@@ -6,6 +6,8 @@
 
 Cloud Relay for the DSH mobile remote-control MVP.
 
+This fork's phone path is **passwordless QR pairing**: install the plugin at the repository root and put a phone-reachable origin in `PUBLIC_RELAY_URL`. See [../README.md](../README.md). Sections below still describe the upstream account-based Relay and are not the App scan flow.
+
 Public production endpoint: `https://relay.dshmobile.online`
 
 ## Browser access
