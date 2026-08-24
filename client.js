@@ -139,6 +139,11 @@ window.__ModuleLoader__.load({
 
       const connected = state.relayConnection === "connected";
       const waiting = state.phase === "pairing" || state.relayConnection === "connecting";
+      const statusLabel = state.phase === "pairing"
+        ? "等待扫码"
+        : state.phase === "unpaired"
+          ? "尚未配对"
+          : statusText[state.relayConnection];
       return h("section", { className: "dshm-root" },
         h("div", { className: "dshm-head" },
           h("div", null,
@@ -147,7 +152,7 @@ window.__ModuleLoader__.load({
           ),
           h("div", { className: "dshm-status" },
             h("span", { className: `dshm-dot ${connected ? "online" : waiting ? "wait" : ""}` }),
-            statusText[state.relayConnection],
+            statusLabel,
           ),
         ),
         h("div", { className: "dshm-grid" },
