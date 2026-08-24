@@ -130,6 +130,7 @@ export class RemoteAccessManager {
   }
 
   async initialize() {
+    if (this.disposed) return;
     if (this.config.hostToken) await this.connect();
   }
 
@@ -283,8 +284,18 @@ export class RemoteAccessManager {
   }
 
   private async connect() {
+    if (this.disposed) return;
     this.client?.stop();
     this.client = this.deps.createClient(this.config);
+    if (this.disposed) {
+      this.client.stop();
+      this.client = undefined;
+      return;
+    }
     await this.client.start();
+    if (this.disposed) {
+      this.client.stop();
+      this.client = undefined;
+    }
   }
 }
