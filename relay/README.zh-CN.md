@@ -69,7 +69,9 @@ docker compose up -d --build
 curl http://127.0.0.1:8787/health
 ```
 
-在 `8787` 端口前配置 HTTPS 反向代理。除非该代理会覆盖客户端转发请求头，否则保持 `TRUST_PROXY=0`。`relay-data` Volume 保存 SQLite 状态，必须备份。在移动应用中选择 **Relay 服务器** 并输入公网 HTTPS Origin；电脑端使用相同的 `DSH_RELAY` 地址启动 DSH。
+在 `8787` 端口前配置 HTTPS 反向代理。除非该代理会覆盖客户端转发请求头，否则保持 `TRUST_PROXY=0`。`relay-data` Volume 保存 SQLite 状态，必须备份。
+
+电脑侧要把 `DSH_RELAY` 和 `PUBLIC_RELAY_URL` **都**改成这台服务器的 origin（HTTPS 域名或 `http://<服务器IP>:8787`），再重启 DSH 并重新扫码。只改二维码、插件仍连 `127.0.0.1:8787` 会对不上。完整步骤见 [../README.zh-CN.md](../README.zh-CN.md) 的「Relay 部署到远程服务器」。
 
 ## 资源限制
 

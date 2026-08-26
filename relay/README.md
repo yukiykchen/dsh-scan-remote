@@ -67,7 +67,9 @@ docker compose up -d --build
 curl http://127.0.0.1:8787/health
 ```
 
-Put an HTTPS reverse proxy in front of port `8787`. Keep `TRUST_PROXY=0` unless that proxy overwrites client forwarding headers. The `relay-data` volume contains SQLite state and must be backed up. In the mobile app, choose **Relay 服务器** and enter the public HTTPS origin; start DSH with the same origin in `DSH_RELAY`.
+Put an HTTPS reverse proxy in front of port `8787`. Keep `TRUST_PROXY=0` unless that proxy overwrites client forwarding headers. The `relay-data` volume contains SQLite state and must be backed up.
+
+On the computer set **both** `DSH_RELAY` and `PUBLIC_RELAY_URL` to this server origin (`https://your-domain` or `http://<server-ip>:8787`), restart DSH, and rescan. If only the QR origin changes and the plugin still uses `http://127.0.0.1:8787`, the two sides never meet. Full steps: [Point DSH at a remote Relay](../README.md#point-dsh-at-a-remote-relay).
 
 ## Resource limits
 

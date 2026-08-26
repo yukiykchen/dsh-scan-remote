@@ -13,7 +13,7 @@ The Android app has three connection modes. **This repository only implements Sc
 | Mode | Where the agent runs | How the phone reaches Host | When to use it |
 | --- | --- | --- | --- |
 | Phone local | Embedded Harness on the phone | App talks to `127.0.0.1:3080` on device | No computer needed |
-| Scan / Relay (this plugin) | DSH on the computer | Scan Settings QR, sealed tunnel via Relay | Phone and computer share a LAN or hotspot |
+| Scan / Relay (this plugin) | DSH on the computer | Scan Settings QR, sealed tunnel via Relay | Same LAN, or a Relay both sides can reach |
 | SSH | DSH on the computer | App opens an SSH local port forward | You already have SSH keys |
 
 Session caches are isolated per mode. In Scan / Relay, the DeepSeek API key lives on the **computer** Host, not in the phone-local engine.
@@ -34,8 +34,8 @@ plugin --outbound WSS--> Relay :8787 <--outbound HTTPS/WSS-- App scan
 
 Do not mix these two URLs:
 
-- `relay` / `DSH_RELAY`: how the plugin reaches Relay. On the computer this is usually `http://127.0.0.1:8787`.
-- `publicRelayUrl` / `PUBLIC_RELAY_URL`: the origin written into the QR. The phone must be able to open it, for example `http://192.168.1.10:8787`.
+- `relay` / `DSH_RELAY`: how the plugin reaches Relay. `http://127.0.0.1:8787` when Relay is on the computer; the server origin when Relay is remote.
+- `publicRelayUrl` / `PUBLIC_RELAY_URL`: the origin written into the QR. On a LAN this is the computer IP, for example `http://192.168.1.10:8787`. For a remote Relay it must be the **same** public origin as `DSH_RELAY`.
 
 The app never ships a public domain; it always uses the origin from the QR fragment.
 
@@ -109,18 +109,47 @@ Typical origins:
 | Home / office Wi-Fi | `http://192.168.x.x:8787` |
 | Phone hotspot (computer joined it) | `http://172.20.10.x:8787` |
 | Android emulator to host Relay | `http://10.0.2.2:8787` |
-| Corporate LAN the phone cannot reach | Do not use that IP; move both devices onto a shared network |
+| Corporate LAN the phone cannot reach | Do not use that IP; move both devices onto a shared network, or host Relay on a public server |
+| Relay on a remote server | `http://<server-ip>:8787` (set `DSH_RELAY` to the same origin) |
 
-Leave `relay` as `http://127.0.0.1:8787` unless Relay itself moved.
+When Relay still runs on the computer, leave `relay` as `http://127.0.0.1:8787`. When Relay has moved, see the next section.
+
+## Point DSH at a remote Relay
+
+LAN scan assumes Relay and DSH are **on the same machine**. If the office Wi-Fi isolates clients, the phone hotspot cannot reach the computer, or you are off-LAN, put Relay on a server both sides can open. Both ends still connect outbound. **Do not** publish computer port `3080`.
+
+The server process must listen on `0.0.0.0:8787` (compose already does; for `npm start` set `HOST=0.0.0.0`). Open TCP `8787` on the cloud security group / firewall, then:
+
+```bash
+curl http://<server-ip>:8787/health
+```
+
+Expect `{"ok":true}`.
+
+On the computer, set **both** URLs to that server. Changing only the QR origin is not enough:
+
+```bash
+export DSH_RELAY=http://<server-ip>:8787
+export PUBLIC_RELAY_URL=http://<server-ip>:8787
+npx @deepseek-ai/dsh web
+```
+
+If `~/.dsh-scan-remote/config.json` already exists, set `relay` and `publicRelayUrl` to the same origin. Still export `DSH_RELAY` when you start: the plugin writes `relay` from that env (default `http://127.0.0.1:8787`), so a json-only edit is overwritten on a bare restart.
+
+A new Relay will not accept the old `hostId` / `hostToken`. Create a fresh QR in Settings (or delete those fields) and **rescan**.
+
+Public production should put HTTPS in front of `8787` and use `https://your-domain`. Plain `http://IP:8787` is enough to try on Android; iOS ATS often blocks public HTTP. Keep `ALLOW_LEGACY_WEB_PROXY=0`. Server details: [relay/README.md](relay/README.md).
 
 ## Restart DSH
 
 ```bash
 lsof -iTCP:3080 -sTCP:LISTEN
+export DSH_RELAY=http://<server-ip>:8787          # skip if Relay is local
+export PUBLIC_RELAY_URL=http://<server-ip>:8787   # or the computer LAN IP
 npx @deepseek-ai/dsh web
 ```
 
-A local Harness checkout can use `pnpm dsh web` instead. Restart after every `publicRelayUrl` change, or Settings will keep showing the old QR.
+A local Harness checkout can use `pnpm dsh web` instead. Restart after every `publicRelayUrl` or `DSH_RELAY` change, or Settings will keep showing the old QR.
 
 ## Config
 
@@ -128,8 +157,8 @@ Credentials live in `~/.dsh-scan-remote/config.json` (mode `0600`), not `~/.dsh-
 
 | Field / env | Meaning |
 | --- | --- |
-| `relay` / `DSH_RELAY` | Plugin-to-Relay URL, default `http://127.0.0.1:8787` |
-| `publicRelayUrl` / `PUBLIC_RELAY_URL` | QR origin, must be reachable from the phone |
+| `relay` / `DSH_RELAY` | Plugin-to-Relay URL. Local Relay: `http://127.0.0.1:8787`. Remote Relay: the server origin |
+| `publicRelayUrl` / `PUBLIC_RELAY_URL` | QR origin, must be reachable from the phone; same as `DSH_RELAY` when Relay is remote |
 | `dshPort` / `DSH_PORT` | Local Harness port, default `3080` |
 | `hostName` / `DSH_DEVICE_NAME` | Computer name in Settings |
 | `DSH_SCAN_REMOTE_CONFIG` | Custom config path |
@@ -151,6 +180,7 @@ v1 uses `sealed-tunnel-v1` (QR PSK, no forward secrecy). Noise IK / WebRTC is v2
 | Symptom | Check |
 | --- | --- |
 | Phone times out to an old `30.x` IP | `publicRelayUrl` is stale; edit, restart, rescan |
+| Phone reaches the public Relay, computer does not | Only `publicRelayUrl` changed; `DSH_RELAY` is still `127.0.0.1`. Set both to the same origin, restart, rescan |
 | `EADDRINUSE 127.0.0.1:3080` | Another DSH web is already running |
 | No Remote Access in Settings | Plugin is not installed on the `web` profile |
 | Pair works but chat does not | Relay still listening on `8787`; firewall; same L2 network |
