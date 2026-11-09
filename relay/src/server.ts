@@ -81,6 +81,9 @@ const wsConnectionLimit = envInteger("MAX_WS_CONNECTIONS", 1_000);
 const apiRateLimit = envInteger("API_RATE_LIMIT_PER_MINUTE", 300);
 const authRateLimit = envInteger("AUTH_RATE_LIMIT_PER_MINUTE", 20);
 const pairRateLimit = envInteger("PAIR_RATE_LIMIT_PER_MINUTE", 30);
+const pairWaitLimit = envInteger("PAIR_WAIT_PER_PAIR", 4);
+const pairWaitGlobalLimit = envInteger("MAX_PAIR_WAIT_GLOBAL", 256);
+const pairWaitMaxMs = envInteger("PAIR_WAIT_MAX_MS", 25_000);
 const tunnelRateLimit = envInteger("TUNNEL_RATE_LIMIT_PER_MINUTE", 600);
 const upgradeRateLimit = envInteger("WS_UPGRADE_RATE_LIMIT_PER_MINUTE", 120);
 const eventPayloadLimit = envInteger("MAX_EVENT_PAYLOAD_BYTES", 64 * 1024);
@@ -120,6 +123,9 @@ const secureUpgradeAuth = new WeakMap<
   { deviceId: string; accessSessionId: string }
 >();
 const consumedTickets = new Set<string>();
+type PairWaiter = { res: ServerResponse; timer: NodeJS.Timeout };
+const pairWaiters = new Map<string, Set<PairWaiter>>();
+let pairWaiterCount = 0;
 const rateLimiter = new FixedWindowRateLimiter();
 const maintenanceTimer = setInterval(() => {
   rateLimiter.sweep();
@@ -171,6 +177,24 @@ function rateLimited(
   return true;
 }
 
+function dropPairWaiter(pairId: string, waiter: PairWaiter) {
+  const set = pairWaiters.get(pairId);
+  if (!set || !set.delete(waiter)) return;
+  pairWaiterCount -= 1;
+  clearTimeout(waiter.timer);
+  if (set.size === 0) pairWaiters.delete(pairId);
+}
+function wakePairWaiters(pairId: string) {
+  const set = pairWaiters.get(pairId);
+  if (!set) return;
+  pairWaiters.delete(pairId);
+  pairWaiterCount -= set.size;
+  for (const waiter of set) {
+    clearTimeout(waiter.timer);
+    if (!waiter.res.headersSent) json(waiter.res, 200, { status: "claimed" });
+    else waiter.res.destroy();
+  }
+}
 function apiRateLimited(
   req: IncomingMessage,
   res: ServerResponse,
@@ -637,7 +661,45 @@ async function api(req: IncomingMessage, res: ServerResponse) {
     if (claimed === "used") return json(res, 409, { error: "already_claimed" });
     if (claimed === "mismatch") return json(res, 403, { error: "invalid_claim" });
     if (claimed === "invalid") return json(res, 404, { error: "not_found" });
+    wakePairWaiters(String(input?.pairId ?? ""));
     return json(res, 200, claimed);
+  }
+  if (req.method === "POST" && url.pathname === "/pair/wait") {
+    const pairId = String(input?.pairId ?? "");
+    const state = store.peekPair(pairId, String(input?.confirmSecret ?? ""));
+    if (state === null)
+      return json(res, 401, { error: "invalid_pair_session" });
+    if (state === "expired") return json(res, 410, { error: "expired" });
+    if (state === "used") return json(res, 409, { error: "already_used" });
+    if (state === "claimed") return json(res, 200, { status: "claimed" });
+    if (pairWaiterCount >= pairWaitGlobalLimit)
+      return json(res, 503, { error: "too_many_waiters" });
+    if ((pairWaiters.get(pairId)?.size ?? 0) >= pairWaitLimit)
+      return json(res, 429, { error: "too_many_waiters" });
+    const requested = Number(input?.timeoutMs);
+    const hold = Math.max(
+      1_000,
+      Math.min(
+        Number.isFinite(requested) ? requested : pairWaitMaxMs,
+        pairWaitMaxMs,
+      ),
+    );
+    const waiter: PairWaiter = {
+      res,
+      timer: setTimeout(() => {
+        dropPairWaiter(pairId, waiter);
+        if (!res.headersSent) json(res, 200, { status: "pending" });
+      }, hold),
+    };
+    let set = pairWaiters.get(pairId);
+    if (!set) {
+      set = new Set();
+      pairWaiters.set(pairId, set);
+    }
+    set.add(waiter);
+    pairWaiterCount += 1;
+    res.once("close", () => dropPairWaiter(pairId, waiter));
+    return;
   }
   if (req.method === "POST" && url.pathname === "/pair/confirm") {
     const result = store.confirmPair(

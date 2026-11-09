@@ -235,6 +235,20 @@ export class Store {
     return { hostId: row.host_id, hostToken };
   }
 
+  /** Look without consuming: state check for the /pair/wait long poll */
+  peekPair(
+    pairId: string,
+    confirmSecret: string,
+  ): "pending" | "claimed" | "expired" | "used" | null {
+    const row = this.db
+      .prepare("SELECT * FROM pair_sessions WHERE id = ?")
+      .get(pairId) as any;
+    if (!row || hash(confirmSecret) !== row.confirm_secret_hash) return null;
+    if (row.used) return "used";
+    if (row.expires_at < Date.now()) return "expired";
+    return row.host_id && row.client_id ? "claimed" : "pending";
+  }
+
   host(id: string): any {
     return this.db.prepare("SELECT * FROM hosts WHERE id = ?").get(id);
   }
