@@ -143,6 +143,7 @@ test("passwordless pairing, tickets, sealed forwarding, and revoke", async (t) =
   });
   assert.equal(claimed.response.status, 200);
   assert.equal(typeof claimed.data.clientToken, "string");
+  assert.equal(typeof claimed.data.clientId, "string");
 
   const reusedClaim = await request("/pair/claim-device", "POST", {
     pairId: session.data.pairId,
@@ -156,6 +157,88 @@ test("passwordless pairing, tickets, sealed forwarding, and revoke", async (t) =
   });
   assert.equal(confirmed.response.status, 200);
   assert.equal(confirmed.data.hostId, claimed.data.hostId);
+
+  // 已配对的 Host 再加一台手机：hostId 不变，Host token 不重新签发
+  const secondToken = claimToken();
+  const deviceSession = await fetch(`${base}/pair/device-session`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Host ${confirmed.data.hostToken}`,
+    },
+    body: JSON.stringify({
+      hostId: confirmed.data.hostId,
+      claimTokenHash: claimHash(secondToken),
+      hostName: "Test Mac",
+    }),
+  });
+  assert.equal(deviceSession.status, 201);
+  const secondSession = (await deviceSession.json()) as any;
+
+  const secondClaim = await request("/pair/claim-device", "POST", {
+    pairId: secondSession.pairId,
+    claimToken: secondToken,
+    deviceLabel: "Emulator",
+    platform: "android",
+  });
+  assert.equal(secondClaim.response.status, 200);
+  assert.equal(secondClaim.data.hostId, claimed.data.hostId);
+  assert.notEqual(secondClaim.data.clientToken, claimed.data.clientToken);
+
+  const secondConfirmed = await request("/pair/confirm", "POST", {
+    pairId: secondSession.pairId,
+    confirmSecret: secondSession.confirmSecret,
+  });
+  assert.equal(secondConfirmed.response.status, 200);
+  assert.equal(secondConfirmed.data.added, true);
+  assert.equal(secondConfirmed.data.hostToken, null);
+
+  // 两台手机都有自己的访问票；撤销其中一台不影响另一台
+  const oldTicket = await fetch(`${base}/access-ticket`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${claimed.data.clientToken}` },
+  });
+  assert.equal(oldTicket.status, 503);
+  const newTicket = await fetch(`${base}/access-ticket`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${secondClaim.data.clientToken}` },
+  });
+  assert.equal(newTicket.status, 503);
+
+  const devices = await fetch(
+    `${base}/host-management/${confirmed.data.hostId}/devices`,
+    {
+      headers: { authorization: `Host ${confirmed.data.hostToken}` },
+    },
+  );
+  assert.equal(devices.status, 200);
+  const deviceList = (await devices.json()) as any;
+  assert.equal(deviceList.devices.length, 2);
+
+  const revoke = await fetch(
+    `${base}/host-management/${confirmed.data.hostId}/devices/${deviceList.devices[1].id}/revoke`,
+    {
+      method: "POST",
+      headers: { authorization: `Host ${confirmed.data.hostToken}` },
+    },
+  );
+  assert.equal(revoke.status, 200);
+  const revokedTicket = await fetch(`${base}/access-ticket`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${secondClaim.data.clientToken}`,
+    },
+  });
+  assert.equal(revokedTicket.status, 401);
+
+  const lastRevoke = await fetch(
+    `${base}/host-management/${confirmed.data.hostId}/devices/${deviceList.devices[0].id}/revoke`,
+    {
+      method: "POST",
+      headers: { authorization: `Host ${confirmed.data.hostToken}` },
+    },
+  );
+  assert.equal(lastRevoke.status, 409);
 
   const expired = await request("/pair/session", "POST", {
     claimTokenHash: claimHash(claimToken()),

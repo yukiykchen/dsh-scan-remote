@@ -45,6 +45,8 @@ export type AdminStats = {
 };
 
 const PAIR_TTL_MS = Number(process.env.PAIR_TTL_MS ?? 120_000);
+/** 一个 Host 最多绑定的手机数；与需求阶段二的「10 台手机」上限一致 */
+const MAX_DEVICES_PER_HOST = Number(process.env.MAX_DEVICES_PER_HOST ?? 10);
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -118,6 +120,12 @@ export class Store {
       CREATE INDEX IF NOT EXISTS access_sessions_host_started ON access_sessions(host_id, started_at DESC);
     `);
     this.cleanupExpired();
+    // 进程重启后没有还活着的隧道；残留的 open session 不能算“手机在线”
+    this.db
+      .prepare(
+        "UPDATE access_sessions SET ended_reason = 'relay_restart' WHERE ended_reason IS NULL",
+      )
+      .run();
   }
 
   close() {
@@ -127,9 +135,13 @@ export class Store {
   createPairSession(
     claimTokenHash: string,
     hostName: string,
+    existingHostId?: string,
   ): { pairId: string; confirmSecret: string; expiresAt: number } {
     if (!/^[a-f0-9]{64}$/.test(claimTokenHash)) {
       throw new Error("invalid_claim_hash");
+    }
+    if (existingHostId && !this.host(existingHostId)) {
+      throw new Error("unknown_host");
     }
     const pairId = randomId("pair");
     const confirmSecret = randomBytes(32).toString("hex");
@@ -137,13 +149,14 @@ export class Store {
     const expiresAt = now + PAIR_TTL_MS;
     this.db
       .prepare(
-        "INSERT INTO pair_sessions VALUES (?, ?, ?, ?, NULL, NULL, ?, 0, ?)",
+        "INSERT INTO pair_sessions VALUES (?, ?, ?, ?, ?, NULL, ?, 0, ?)",
       )
       .run(
         pairId,
         hostName || "DSH Computer",
         claimTokenHash,
         hash(confirmSecret),
+        existingHostId ?? null,
         expiresAt,
         now,
       );
@@ -155,11 +168,17 @@ export class Store {
     claimToken: string,
     info: AccessClientInfo,
   ):
-    | { hostId: string; hostName: string; clientToken: string }
+    | {
+        hostId: string;
+        hostName: string;
+        clientId: string;
+        clientToken: string;
+      }
     | "expired"
     | "used"
     | "mismatch"
-    | "invalid" {
+    | "invalid"
+    | "limit" {
     let claimHash: string;
     try {
       claimHash = hashClaim(claimToken);
@@ -179,6 +198,40 @@ export class Store {
       !timingSafeEqual(expected, received)
     )
       return "mismatch";
+    // 已存在的 Host 加手机：复用 hostId，只发一条新的 client token。
+    const existingHostId: string | null = row.host_id ?? null;
+    if (existingHostId) {
+      if (!this.host(existingHostId)) return "invalid";
+      if (this.activeClientCount(existingHostId) >= MAX_DEVICES_PER_HOST)
+        return "limit";
+      const clientId = randomId("client");
+      const clientToken = randomBytes(32).toString("hex");
+      const now = Date.now();
+      const tx = this.db.transaction(() => {
+        this.db
+          .prepare(
+            "INSERT INTO client_tokens VALUES (?, ?, ?, ?, ?, ?, NULL)",
+          )
+          .run(
+            clientId,
+            existingHostId,
+            hash(clientToken),
+            info.deviceLabel,
+            info.platform,
+            now,
+          );
+        this.db
+          .prepare("UPDATE pair_sessions SET client_id = ? WHERE id = ?")
+          .run(clientId, pairId);
+      });
+      tx();
+      return {
+        hostId: existingHostId,
+        hostName: row.host_name,
+        clientId,
+        clientToken,
+      };
+    }
     const hostId = randomId("host");
     const clientId = randomId("client");
     const clientToken = randomBytes(32).toString("hex");
@@ -208,13 +261,17 @@ export class Store {
         .run(hostId, clientId, pairId);
     });
     tx();
-    return { hostId, hostName: row.host_name, clientToken };
+    return { hostId, hostName: row.host_name, clientId, clientToken };
   }
 
   confirmPair(
     pairId: string,
     confirmSecret: string,
-  ): { hostId: string; hostToken: string } | "pending" | "expired" | null {
+  ):
+    | { hostId: string; hostToken: string | null; added?: boolean }
+    | "pending"
+    | "expired"
+    | null {
     const row = this.db
       .prepare("SELECT * FROM pair_sessions WHERE id = ?")
       .get(pairId) as any;
@@ -222,6 +279,14 @@ export class Store {
     if (row.used) return null;
     if (row.expires_at < Date.now()) return "expired";
     if (!row.host_id || !row.client_id) return "pending";
+    // 加手机：Host 已有 token，不能再签一把新的，否则旧 token 立刻失效。
+    const host = this.host(row.host_id);
+    if (host?.host_token_hash) {
+      this.db
+        .prepare("UPDATE pair_sessions SET used = 1 WHERE id = ?")
+        .run(pairId);
+      return { hostId: row.host_id, hostToken: null, added: true };
+    }
     const hostToken = randomBytes(32).toString("hex");
     const tx = this.db.transaction(() => {
       this.db
@@ -233,6 +298,80 @@ export class Store {
     });
     tx();
     return { hostId: row.host_id, hostToken };
+  }
+
+  activeClientCount(hostId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) count FROM client_tokens WHERE host_id = ? AND revoked_at IS NULL",
+      )
+      .get(hostId) as { count: number };
+    return row?.count ?? 0;
+  }
+
+  listDevices(hostId: string): Array<{
+    id: string;
+    deviceLabel: string;
+    platform: string;
+    createdAt: number;
+    lastSeenAt: number | null;
+    online: boolean;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT c.id, c.device_label deviceLabel, c.platform, c.created_at createdAt,
+           (SELECT MAX(a.last_seen_at) FROM access_sessions a WHERE a.client_id = c.id) lastSeenAt,
+           EXISTS(
+             SELECT 1 FROM access_sessions a
+             WHERE a.client_id = c.id AND a.ended_reason IS NULL
+           ) online
+         FROM client_tokens c
+         WHERE c.host_id = ? AND c.revoked_at IS NULL
+         ORDER BY c.created_at`,
+      )
+      .all(hostId) as Array<any>;
+    return rows.map((row) => ({
+      id: String(row.id),
+      deviceLabel: String(row.deviceLabel),
+      platform: String(row.platform),
+      createdAt: Number(row.createdAt),
+      lastSeenAt: row.lastSeenAt == null ? null : Number(row.lastSeenAt),
+      online: Number(row.online) === 1,
+    }));
+  }
+
+  revokeDevice(
+    hostId: string,
+    clientId: string,
+  ): { ok: boolean; accessSessionIds: string[] } {
+    const token = this.db
+      .prepare(
+        "SELECT id FROM client_tokens WHERE id = ? AND host_id = ? AND revoked_at IS NULL",
+      )
+      .get(clientId, hostId) as { id: string } | undefined;
+    if (!token) return { ok: false, accessSessionIds: [] };
+    const accessSessionIds = (
+      this.db
+        .prepare(
+          "SELECT id FROM access_sessions WHERE host_id = ? AND client_id = ? AND ended_reason IS NULL",
+        )
+        .all(hostId, clientId) as Array<{ id: string }>
+    ).map((row) => row.id);
+    const now = Date.now();
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare(
+          "UPDATE client_tokens SET revoked_at = ? WHERE id = ? AND host_id = ? AND revoked_at IS NULL",
+        )
+        .run(now, clientId, hostId);
+      this.db
+        .prepare(
+          "UPDATE access_sessions SET ended_reason = 'revoked' WHERE host_id = ? AND client_id = ? AND ended_reason IS NULL",
+        )
+        .run(hostId, clientId);
+    });
+    tx();
+    return { ok: true, accessSessionIds };
   }
 
   host(id: string): any {

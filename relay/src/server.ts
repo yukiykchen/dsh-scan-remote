@@ -266,6 +266,12 @@ function closeHostTunnels(hostId: string, reason: string) {
   }
 }
 
+function closeSecureSessions(accessSessionIds: string[], reason: string) {
+  for (const accessSessionId of accessSessionIds) {
+    closeSecureRoute(accessSessionId, 4001, reason, false);
+  }
+}
+
 function secureCountForDevice(deviceId: string) {
   let count = 0;
   for (const route of secureRoutes.values())
@@ -617,6 +623,33 @@ async function api(req: IncomingMessage, res: ServerResponse) {
       return json(res, 400, { error: "invalid_claim_hash" });
     }
   }
+  if (req.method === "POST" && url.pathname === "/pair/device-session") {
+    const hostToken = req.headers.authorization?.startsWith("Host ")
+      ? req.headers.authorization.slice(5)
+      : undefined;
+    const hostId = typeof input?.hostId === "string" ? input.hostId : "";
+    if (
+      !hostToken ||
+      !hostId ||
+      !store.findHostByToken(hostId, hostToken)
+    )
+      return json(res, 401, { error: "invalid_host_token" });
+    try {
+      const created = store.createPairSession(
+        String(input?.claimTokenHash ?? ""),
+        String(input?.hostName ?? "DSH Computer"),
+        hostId,
+      );
+      return json(res, 201, created);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      return json(
+        res,
+        message === "unknown_host" ? 404 : 400,
+        { error: message === "unknown_host" ? "unknown_host" : "invalid_claim_hash" },
+      );
+    }
+  }
   if (req.method === "POST" && url.pathname === "/pair/claim-device") {
     const claimed = store.claimPair(
       String(input?.pairId ?? ""),
@@ -637,6 +670,8 @@ async function api(req: IncomingMessage, res: ServerResponse) {
     if (claimed === "used") return json(res, 409, { error: "already_claimed" });
     if (claimed === "mismatch") return json(res, 403, { error: "invalid_claim" });
     if (claimed === "invalid") return json(res, 404, { error: "not_found" });
+    if (claimed === "limit")
+      return json(res, 409, { error: "device_limit" });
     return json(res, 200, claimed);
   }
   if (req.method === "POST" && url.pathname === "/pair/confirm") {
@@ -679,6 +714,7 @@ async function api(req: IncomingMessage, res: ServerResponse) {
       expiresIn,
       accessSessionId,
       hostId: client.hostId,
+      clientId: client.id,
       tunnelUrl: secureTunnelUrl(req),
     });
   }
@@ -710,6 +746,36 @@ async function api(req: IncomingMessage, res: ServerResponse) {
     return json(res, 200, {
       sessions: store.listAccessSessions(accessSessionsRoute[1], limit),
     });
+  }
+  const devicesRoute = routeMatch(
+    url.pathname,
+    /^\/host-management\/([^/]+)\/devices$/,
+  );
+  if (devicesRoute && req.method === "GET") {
+    const hostToken = req.headers.authorization?.startsWith("Host ")
+      ? req.headers.authorization.slice(5)
+      : undefined;
+    if (!hostToken || !store.findHostByToken(devicesRoute[1], hostToken))
+      return json(res, 401, { error: "invalid_host_token" });
+    return json(res, 200, { devices: store.listDevices(devicesRoute[1]) });
+  }
+  const deviceRevokeRoute = routeMatch(
+    url.pathname,
+    /^\/host-management\/([^/]+)\/devices\/([^/]+)\/revoke$/,
+  );
+  if (deviceRevokeRoute && req.method === "POST") {
+    const hostToken = req.headers.authorization?.startsWith("Host ")
+      ? req.headers.authorization.slice(5)
+      : undefined;
+    const hostId = deviceRevokeRoute[1];
+    if (!hostToken || !store.findHostByToken(hostId, hostToken))
+      return json(res, 401, { error: "invalid_host_token" });
+    if (store.activeClientCount(hostId) <= 1)
+      return json(res, 409, { error: "last_device" });
+    const revoked = store.revokeDevice(hostId, deviceRevokeRoute[2]);
+    if (!revoked.ok) return json(res, 404, { error: "not_found" });
+    closeSecureSessions(revoked.accessSessionIds, "device revoked");
+    return json(res, 200, { ok: true });
   }
   const deviceUnbindRoute = routeMatch(
     url.pathname,
