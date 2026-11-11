@@ -38,6 +38,7 @@ test("creates pairing state immediately and never exposes credentials", async ()
           expiresAt: Date.now() + 60_000,
         },
       };
+      if (url.endsWith("/pair/wait")) return { status: 404, data: {} };
       confirms += 1;
       return { status: 202, data: { status: "pending" } };
     },
@@ -70,6 +71,7 @@ test("cancels pairing before confirmation polling", async () => {
           expiresAt: Date.now() + 60_000,
         },
       };
+      if (url.endsWith("/pair/wait")) return { status: 404, data: {} };
       confirms += 1;
       return { status: 202, data: {} };
     },
@@ -172,6 +174,7 @@ test("does not overwrite an existing Host Token until confirm succeeds", async (
           },
         };
       }
+      if (url.endsWith("/pair/wait")) return { status: 404, data: {} };
       return { status: 202, data: { status: "pending" } };
     },
     save: async (received) => {
@@ -192,6 +195,42 @@ test("does not overwrite an existing Host Token until confirm succeeds", async (
   assert.equal(state.phase, "pairing");
   assert.equal(state.hostId, "host_old");
   assert.equal(saved, undefined);
+  manager.dispose();
+});
+
+test("pairs from a /pair/wait claim before confirming once", async () => {
+  let confirms = 0;
+  let saved: Config | undefined;
+  const manager = new RemoteAccessManager(config, {
+    request: async (url) => {
+      if (url.endsWith("/pair/session")) {
+        return {
+          status: 201,
+          data: {
+            pairId: "pair_wait",
+            confirmSecret: "secret_wait",
+            expiresAt: Date.now() + 60_000,
+          },
+        };
+      }
+      if (url.endsWith("/pair/wait")) return { status: 200, data: { status: "claimed" } };
+      confirms += 1;
+      return { status: 200, data: { hostId: "host_new", hostToken: "token_new" } };
+    },
+    save: async (received) => { saved = received; },
+    createClient: () => ({
+      start: async () => undefined,
+      stop: () => undefined,
+      status: () => ({ connected: true, dsh: true }),
+    }),
+    probeDsh: async () => true,
+    pollIntervalMs: 20,
+  });
+  await manager.startPairing();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal((await manager.state()).phase, "paired");
+  assert.equal(saved?.hostToken, "token_new");
+  assert.equal(confirms, 1);
   manager.dispose();
 });
 

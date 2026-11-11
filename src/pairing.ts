@@ -3,13 +3,21 @@ import { Config, saveConfig } from "./config.js";
 import { deriveClaimToken, generateMasterKey, hashClaimToken } from "./e2ee.js";
 import { pairingLink, publicRelayOrigin } from "./pair-link.js";
 
-async function post(url: string, data: unknown) {
+async function post(url: string, data: unknown, signal?: AbortSignal) {
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(data),
+    signal,
   });
   return { status: response.status, data: (await response.json()) as any };
+}
+
+const waitTimeoutMs = 25_000;
+const retryDelayMs = 3000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function pair(config: Config): Promise<Config> {
@@ -32,7 +40,33 @@ export async function pair(config: Config): Promise<Config> {
   qrcode.generate(qr, { small: true }, (output) => console.log(output));
   console.log(qr);
   console.log("Waiting for the mobile app to claim this QR...");
+  let legacy = false;
   while (Date.now() < expiresAt) {
+    if (!legacy) {
+      let waiting: { status: number; data: any };
+      try {
+        waiting = await post(
+          `${config.relay}/pair/wait`,
+          { pairId, confirmSecret, timeoutMs: waitTimeoutMs },
+          AbortSignal.timeout(waitTimeoutMs + 5000),
+        );
+      } catch {
+        await sleep(retryDelayMs);
+        continue;
+      }
+      if (waiting.status === 404) {
+        legacy = true;
+        continue;
+      }
+      if (waiting.status === 410) throw new Error("Pairing QR expired");
+      if (waiting.status === 429) {
+        await sleep(retryDelayMs);
+        continue;
+      }
+      if (waiting.status !== 200)
+        throw new Error(`Pairing failed (${waiting.status})`);
+      if (waiting.data?.status !== "claimed") continue;
+    }
     const confirmed = await post(`${config.relay}/pair/confirm`, {
       pairId,
       confirmSecret,
@@ -48,9 +82,14 @@ export async function pair(config: Config): Promise<Config> {
       console.log(`Paired as ${config.hostName}`);
       return next;
     }
+    if (confirmed.status === 410) throw new Error("Pairing QR expired");
+    if (confirmed.status === 429) {
+      await sleep(retryDelayMs);
+      continue;
+    }
     if (confirmed.status !== 202)
       throw new Error(`Pairing failed (${confirmed.status})`);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (legacy) await sleep(2000);
   }
   throw new Error("Pairing QR expired");
 }
